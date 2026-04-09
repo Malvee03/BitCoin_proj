@@ -1,12 +1,11 @@
 import streamlit as st
 import pandas as pd
 import requests
-import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.linear_model import LinearRegression
 import time
+import plotly.graph_objects as go
+from sklearn.linear_model import LinearRegression
 
-# IMPORTS AJUSTADOS
 from db_bitcoin_proj import save_to_db
 from indicadores import add_indicators
 
@@ -14,14 +13,10 @@ st.set_page_config(page_title="Dashboard Bitcoin", layout="wide")
 
 st.title("📈 Dashboard Bitcoin")
 
-# -----------------------------
-# FILTRO
-# -----------------------------
-days = st.selectbox("Escolha o período:", [7, 30, 90, 180])
+# PERÍODO FIXO (180 dias)
+days = 180
 
-# -----------------------------
-# API COM CACHE
-# -----------------------------
+# API
 @st.cache_data(ttl=300)
 def get_data(days):
     url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
@@ -58,59 +53,118 @@ def get_data(days):
 
     return pd.DataFrame()
 
-# -----------------------------
-# CARREGAR DADOS
-# -----------------------------
+
 df = get_data(days)
 
 if df.empty:
     st.error("Erro ao carregar dados da API")
     st.stop()
 
-# -----------------------------
-# SALVAR NO BANCO
-# -----------------------------
 save_to_db(df)
 
-# -----------------------------
-# INDICADORES
-# -----------------------------
 df = add_indicators(df)
 
-# -----------------------------
-# TÍTULO
-# -----------------------------
-st.subheader(f"Preço do Bitcoin (últimos {days} dias)")
+# PREPARAR DATAS
+df["month"] = df["date"].dt.to_period("M")
+df["year"] = df["date"].dt.year
 
-# -----------------------------
-# MÉTRICA
-# -----------------------------
-st.metric("Preço atual (USD)", f"${df['price'].iloc[-1]:,.2f}")
+current_month = df["month"].max()
+previous_month = current_month - 1
 
-# -----------------------------
-# GRÁFICO COM MÉDIA MÓVEL
-# -----------------------------
-fig, ax = plt.subplots()
-ax.plot(df["date"], df["price"], label="Preço")
-ax.plot(df["date"], df["SMA_7"], label="Média móvel (7 dias)")
+current_year = df["year"].max()
+previous_year = current_year - 1
 
-ax.set_xlabel("Data")
-ax.set_ylabel("Preço USD")
-ax.legend()
+# COMPARAÇÃO MENSAL
+df_current_month = df[df["month"] == current_month]
+df_previous_month = df[df["month"] == previous_month]
 
-st.pyplot(fig)
+avg_current_month = df_current_month["price"].mean()
+avg_previous_month = df_previous_month["price"].mean()
 
-# -----------------------------
+delta_month = 0
+if avg_previous_month != 0:
+    delta_month = ((avg_current_month - avg_previous_month) / avg_previous_month) * 100
+
+st.subheader("📅 Comparação Mensal")
+
+col1, col2 = st.columns(2)
+
+col1.metric("Mês Atual", f"${avg_current_month:,.2f}")
+col2.metric("Mês Anterior", f"${avg_previous_month:,.2f}", delta=f"{delta_month:.2f}%")
+
+# COMPARAÇÃO ANUAL
+df_current_year = df[df["year"] == current_year]
+df_previous_year = df[df["year"] == previous_year]
+
+avg_current_year = df_current_year["price"].mean()
+avg_previous_year = df_previous_year["price"].mean()
+
+delta_year = 0
+if avg_previous_year != 0:
+    delta_year = ((avg_current_year - avg_previous_year) / avg_previous_year) * 100
+
+st.subheader("📊 Comparação Anual")
+
+col3, col4 = st.columns(2)
+
+col3.metric("Ano Atual", f"${avg_current_year:,.2f}")
+col4.metric("Ano Anterior", f"${avg_previous_year:,.2f}", delta=f"{delta_year:.2f}%")
+
+# MÉTRICA ATUAL
+st.subheader("💰 Preço Atual")
+st.metric("Bitcoin (USD)", f"${df['price'].iloc[-1]:,.2f}")
+
+# SLIDER DE VISUALIZAÇÃO
+range_days = st.slider(
+    "Visualizar últimos dias:",
+    7, len(df), 30
+)
+
+df_filtered = df.tail(range_days)
+
+# GRÁFICO INTERATIVO
+fig = go.Figure()
+
+fig.add_trace(go.Scatter(
+    x=df_filtered["date"],
+    y=df_filtered["price"],
+    mode='lines+markers',
+    name='Preço',
+    line=dict(width=3),
+))
+
+fig.add_trace(go.Scatter(
+    x=df_filtered["date"],
+    y=df_filtered["SMA_7"],
+    mode='lines+markers',
+    name='Média Móvel (7)',
+    line=dict(dash='dash', width=2),
+))
+
+fig.update_layout(
+    title="📊 Evolução do Bitcoin",
+    xaxis_title="Data",
+    yaxis_title="Preço USD",
+    xaxis=dict(
+        tickformat="%d/%m",
+        rangeslider=dict(visible=True)
+    ),
+    hovermode="x unified"
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
 # TENDÊNCIA
-# -----------------------------
-if df["price"].iloc[-1] > df["SMA_7"].iloc[-1]:
-    st.success("📈 Tendência de ALTA")
-else:
-    st.error("📉 Tendência de BAIXA")
+st.subheader("📊 Tendência")
 
-# -----------------------------
+if df["price"].iloc[-1] > df["SMA_7"].iloc[-1]:
+    st.markdown("### 🟢 📈 Alta")
+    st.progress(100)
+else:
+    st.markdown("### 🔴 📉 Baixa")
+    st.progress(30)
+
 # PREVISÃO
-# -----------------------------
 if len(df) > 10:
 
     df["days"] = (df["date"] - df["date"].min()).dt.days
@@ -130,16 +184,34 @@ if len(df) > 10:
         freq="D"
     )[1:]
 
-    fig, ax = plt.subplots()
-    ax.plot(df["date"], df["price"], label="Histórico")
-    ax.plot(future_dates, predictions, linestyle="dashed", label="Previsão")
+    fig_pred = go.Figure()
 
-    ax.legend()
-    st.pyplot(fig)
+    fig_pred.add_trace(go.Scatter(
+        x=df["date"],
+        y=df["price"],
+        mode='lines',
+        name='Histórico'
+    ))
 
-# -----------------------------
-# BOTÃO ATUALIZAR
-# -----------------------------
+    fig_pred.add_trace(go.Scatter(
+        x=future_dates,
+        y=predictions,
+        mode='lines+markers',
+        name='Previsão',
+        line=dict(dash='dash')
+    ))
+
+    fig_pred.update_layout(
+        title="🔮 Previsão de Preço",
+        xaxis_title="Data",
+        yaxis_title="Preço USD",
+        xaxis=dict(tickformat="%d/%m"),
+        hovermode="x unified"
+    )
+
+    st.plotly_chart(fig_pred, use_container_width=True)
+
+# BOTÃO PRA ATUALIZAR DADOS
 if st.button("🔄 Atualizar dados"):
     st.cache_data.clear()
     st.rerun()
