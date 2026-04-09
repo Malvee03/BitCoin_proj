@@ -13,7 +13,6 @@ st.set_page_config(page_title="Dashboard Bitcoin", layout="wide")
 
 st.title("📈 Dashboard Bitcoin")
 
-# PERÍODO FIXO (180 dias)
 days = 180
 
 # API
@@ -53,7 +52,6 @@ def get_data(days):
 
     return pd.DataFrame()
 
-
 df = get_data(days)
 
 if df.empty:
@@ -61,7 +59,6 @@ if df.empty:
     st.stop()
 
 save_to_db(df)
-
 df = add_indicators(df)
 
 # PREPARAR DATAS
@@ -154,15 +151,35 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# TENDÊNCIA
+# TENDÊNCIA CORRETA
 st.subheader("📊 Tendência")
 
-if df["price"].iloc[-1] > df["SMA_7"].iloc[-1]:
-    st.markdown("### 🟢 📈 Alta")
-    st.progress(100)
+sma = df_filtered["SMA_7"].dropna()
+
+if len(sma) > 5:
+
+    # Inclinação da média
+    slope = sma.iloc[-1] - sma.iloc[-5]
+
+    # Últimos valores
+    last_price = df_filtered["price"].iloc[-1]
+    last_sma = sma.iloc[-1]
+
+    # Lógica combinada
+    if last_price > last_sma and slope > 0:
+        st.markdown("### 🔴 📉 Tendência de BAIXA")
+        st.progress(100)
+
+    elif last_price < last_sma and slope < 0:
+        st.markdown("### 🟢 📈 Tendência de ALTA")
+        st.progress(30)
+
+    else:
+        st.markdown("### ⚪ 📊 Tendência LATERAL")
+        st.progress(50)
+
 else:
-    st.markdown("### 🔴 📉 Baixa")
-    st.progress(30)
+    st.warning("Dados insuficientes para análise de tendência")
 
 # PREVISÃO
 if len(df) > 10:
@@ -211,7 +228,7 @@ if len(df) > 10:
 
     st.plotly_chart(fig_pred, use_container_width=True)
 
-# BOTÃO PRA ATUALIZAR DADOS
-if st.button("🔄 Atualizar dados"):
+# BOTÃO PARA ATUALIZAR
+if st.button("Atualizar dados"):
     st.cache_data.clear()
     st.rerun()
