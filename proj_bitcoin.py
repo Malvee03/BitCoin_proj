@@ -6,19 +6,23 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 import time
 
+# IMPORTS AJUSTADOS
+from db_bitcoin_proj import save_to_db
+from indicadores import add_indicators
+
 st.set_page_config(page_title="Dashboard Bitcoin", layout="wide")
 
 st.title("📈 Dashboard Bitcoin")
 
 # -----------------------------
-# FILTRO DE PERÍODO
+# FILTRO
 # -----------------------------
 days = st.selectbox("Escolha o período:", [7, 30, 90, 180])
 
 # -----------------------------
-# CACHE (EVITA RATE LIMIT)
+# API COM CACHE
 # -----------------------------
-@st.cache_data(ttl=300)  # 5 minutos
+@st.cache_data(ttl=300)
 def get_data(days):
     url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
     params = {
@@ -26,12 +30,12 @@ def get_data(days):
         "days": days
     }
 
-    for attempt in range(3):  # tenta até 3 vezes
+    for _ in range(3):
         try:
             response = requests.get(url, params=params, timeout=10)
 
             if response.status_code == 429:
-                time.sleep(2)  # espera se tomou rate limit
+                time.sleep(2)
                 continue
 
             if response.status_code != 200:
@@ -49,7 +53,7 @@ def get_data(days):
 
             return df
 
-        except requests.exceptions.RequestException:
+        except:
             time.sleep(2)
 
     return pd.DataFrame()
@@ -60,31 +64,52 @@ def get_data(days):
 df = get_data(days)
 
 if df.empty:
-    st.error("⚠️ Não foi possível carregar os dados. Tente novamente em alguns segundos.")
+    st.error("Erro ao carregar dados da API")
     st.stop()
 
 # -----------------------------
-# TÍTULO DINÂMICO
+# SALVAR NO BANCO
+# -----------------------------
+save_to_db(df)
+
+# -----------------------------
+# INDICADORES
+# -----------------------------
+df = add_indicators(df)
+
+# -----------------------------
+# TÍTULO
 # -----------------------------
 st.subheader(f"Preço do Bitcoin (últimos {days} dias)")
 
 # -----------------------------
-# MÉTRICA (PREÇO ATUAL)
+# MÉTRICA
 # -----------------------------
-st.metric("Preço atual do Bitcoin (USD)", f"${df['price'].iloc[-1]:,.2f}")
+st.metric("Preço atual (USD)", f"${df['price'].iloc[-1]:,.2f}")
 
 # -----------------------------
-# GRÁFICO HISTÓRICO
+# GRÁFICO COM MÉDIA MÓVEL
 # -----------------------------
 fig, ax = plt.subplots()
-ax.plot(df["date"], df["price"])
+ax.plot(df["date"], df["price"], label="Preço")
+ax.plot(df["date"], df["SMA_7"], label="Média móvel (7 dias)")
+
 ax.set_xlabel("Data")
 ax.set_ylabel("Preço USD")
+ax.legend()
 
 st.pyplot(fig)
 
 # -----------------------------
-# PREVISÃO (REGRESSÃO LINEAR)
+# TENDÊNCIA
+# -----------------------------
+if df["price"].iloc[-1] > df["SMA_7"].iloc[-1]:
+    st.success("📈 Tendência de ALTA")
+else:
+    st.error("📉 Tendência de BAIXA")
+
+# -----------------------------
+# PREVISÃO
 # -----------------------------
 if len(df) > 10:
 
@@ -105,24 +130,15 @@ if len(df) > 10:
         freq="D"
     )[1:]
 
-    # -----------------------------
-    # GRÁFICO COM PREVISÃO
-    # -----------------------------
     fig, ax = plt.subplots()
     ax.plot(df["date"], df["price"], label="Histórico")
     ax.plot(future_dates, predictions, linestyle="dashed", label="Previsão")
 
-    ax.set_xlabel("Data")
-    ax.set_ylabel("Preço USD")
     ax.legend()
-
     st.pyplot(fig)
 
-else:
-    st.warning("Poucos dados para gerar previsão")
-
 # -----------------------------
-# BOTÃO DE ATUALIZAÇÃO
+# BOTÃO ATUALIZAR
 # -----------------------------
 if st.button("🔄 Atualizar dados"):
     st.cache_data.clear()
