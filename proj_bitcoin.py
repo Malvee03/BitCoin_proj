@@ -4,29 +4,103 @@ import requests
 import numpy as np
 import time
 import plotly.graph_objects as go
-from sklearn.linear_model import LinearRegression
+from plotly.subplots import make_subplots
 
 from db_bitcoin_proj import save_to_db
 from indicadores import add_indicators
 
-st.set_page_config(page_title="Dashboard Bitcoin", layout="wide")
+# Configuração da página
 
-st.title("📈 Dashboard Bitcoin")
+st.set_page_config(
+    page_title="Bitcoin Intelligence Dashboard",
+    page_icon="₿",
+    layout="wide"
+)
 
-days = 180
+st.markdown(
+    """
+    <style>
+
+    div.modebar {
+        top: -45px !important;
+        right: 0px !important;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+# Estilo da aplicação
+
+st.markdown(
+    """
+    <style>
+
+    .main {
+        background-color: #0E1117;
+    }
+
+    div[data-testid="metric-container"] {
+        background-color: #161B22;
+        border: 1px solid #30363D;
+        padding: 15px;
+        border-radius: 12px;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# Sidebar
+
+with st.sidebar:
+
+    st.title("⚙️ Configurações")
+
+    days = st.slider(
+        "Período analisado",
+        30,
+        365,
+        180
+    )
+
+    prediction_days = st.slider(
+        "Dias de projeção",
+        7,
+        30,
+        14
+    )
+
+# Header
+
+st.title("₿ Bitcoin Intelligence Dashboard")
+
+st.caption(
+    "Plataforma analítica para monitoramento do Bitcoin"
+)
 
 # API
+
 @st.cache_data(ttl=300)
 def get_data(days):
+
     url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+
     params = {
         "vs_currency": "usd",
         "days": days
     }
 
     for _ in range(3):
+
         try:
-            response = requests.get(url, params=params, timeout=10)
+
+            response = requests.get(
+                url,
+                params=params,
+                timeout=10
+            )
 
             if response.status_code == 429:
                 time.sleep(2)
@@ -40,10 +114,15 @@ def get_data(days):
             if "prices" not in data:
                 continue
 
-            prices = data["prices"]
+            df = pd.DataFrame(
+                data["prices"],
+                columns=["timestamp", "price"]
+            )
 
-            df = pd.DataFrame(prices, columns=["timestamp", "price"])
-            df["date"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df["date"] = pd.to_datetime(
+                df["timestamp"],
+                unit="ms"
+            )
 
             return df
 
@@ -52,183 +131,496 @@ def get_data(days):
 
     return pd.DataFrame()
 
-df = get_data(days)
+# Carregar dados
+
+with st.spinner("Carregando dados do mercado..."):
+
+    df = get_data(days)
 
 if df.empty:
+
     st.error("Erro ao carregar dados da API")
+
     st.stop()
 
+# Banco de dados
+
 save_to_db(df)
+
+# Indicadores
+
 df = add_indicators(df)
 
-# PREPARAR DATAS
-df["month"] = df["date"].dt.to_period("M")
-df["year"] = df["date"].dt.year
+# Métricas principais
 
-current_month = df["month"].max()
-previous_month = current_month - 1
+current_price = df["price"].iloc[-1]
 
-current_year = df["year"].max()
-previous_year = current_year - 1
+price_change = (
+    (
+        df["price"].iloc[-1]
+        - df["price"].iloc[-2]
+    )
+    / df["price"].iloc[-2]
+) * 100
 
-# COMPARAÇÃO MENSAL
-df_current_month = df[df["month"] == current_month]
-df_previous_month = df[df["month"] == previous_month]
+volatility = df["volatility"].iloc[-1]
 
-avg_current_month = df_current_month["price"].mean()
-avg_previous_month = df_previous_month["price"].mean()
+rsi = df["RSI"].iloc[-1]
 
-delta_month = 0
-if avg_previous_month != 0:
-    delta_month = ((avg_current_month - avg_previous_month) / avg_previous_month) * 100
+# Market score
 
-st.subheader("📅 Comparação Mensal")
+market_score = 50
 
-col1, col2 = st.columns(2)
+if rsi < 30:
+    market_score += 20
 
-col1.metric("Mês Atual", f"${avg_current_month:,.2f}")
-col2.metric("Mês Anterior", f"${avg_previous_month:,.2f}", delta=f"{delta_month:.2f}%")
+elif rsi > 70:
+    market_score -= 20
 
-# COMPARAÇÃO ANUAL
-df_current_year = df[df["year"] == current_year]
-df_previous_year = df[df["year"] == previous_year]
+if price_change > 0:
+    market_score += 15
 
-avg_current_year = df_current_year["price"].mean()
-avg_previous_year = df_previous_year["price"].mean()
+else:
+    market_score -= 15
 
-delta_year = 0
-if avg_previous_year != 0:
-    delta_year = ((avg_current_year - avg_previous_year) / avg_previous_year) * 100
-
-st.subheader("📊 Comparação Anual")
-
-col3, col4 = st.columns(2)
-
-col3.metric("Ano Atual", f"${avg_current_year:,.2f}")
-col4.metric("Ano Anterior", f"${avg_previous_year:,.2f}", delta=f"{delta_year:.2f}%")
-
-# MÉTRICA ATUAL
-st.subheader("💰 Preço Atual")
-st.metric("Bitcoin (USD)", f"${df['price'].iloc[-1]:,.2f}")
-
-# SLIDER DE VISUALIZAÇÃO
-range_days = st.slider(
-    "Visualizar últimos dias:",
-    7, len(df), 30
+market_score = max(
+    0,
+    min(100, market_score)
 )
 
-df_filtered = df.tail(range_days)
+# Cards
 
-# GRÁFICO INTERATIVO
-fig = go.Figure()
+col1, col2, col3, col4 = st.columns(4)
 
-fig.add_trace(go.Scatter(
-    x=df_filtered["date"],
-    y=df_filtered["price"],
-    mode='lines+markers',
-    name='Preço',
-    line=dict(width=3),
-))
+col1.metric(
+    "Preço Atual",
+    f"${current_price:,.2f}",
+    f"{price_change:.2f}%"
+)
 
-fig.add_trace(go.Scatter(
-    x=df_filtered["date"],
-    y=df_filtered["SMA_7"],
-    mode='lines+markers',
-    name='Média Móvel (7)',
-    line=dict(dash='dash', width=2),
-))
+col2.metric(
+    "RSI",
+    f"{rsi:.2f}"
+)
+
+col3.metric(
+    "Volatilidade",
+    f"{volatility:,.2f}"
+)
+
+col4.metric(
+    "Market Score",
+    f"{market_score}/100"
+)
+
+# Gráfico principal
+
+st.subheader("📈 Análise Técnica")
+
+fig = make_subplots(
+    rows=2,
+    cols=1,
+    shared_xaxes=True,
+    vertical_spacing=0.12,
+    row_heights=[0.75, 0.25]
+)
+
+# Preço do Bitcoin
+
+fig.add_trace(
+    go.Scatter(
+        x=df["date"],
+        y=df["price"],
+        name="Bitcoin",
+        line=dict(width=3)
+    ),
+    row=1,
+    col=1
+)
+
+# SMA 7
+
+fig.add_trace(
+    go.Scatter(
+        x=df["date"],
+        y=df["SMA_7"],
+        name="SMA 7",
+        line=dict(
+            dash="dash",
+            width=2
+        )
+    ),
+    row=1,
+    col=1
+)
+
+# SMA 30
+
+fig.add_trace(
+    go.Scatter(
+        x=df["date"],
+        y=df["SMA_30"],
+        name="SMA 30",
+        line=dict(
+            dash="dot",
+            width=2
+        )
+    ),
+    row=1,
+    col=1
+)
+
+# RSI
+
+fig.add_trace(
+    go.Scatter(
+        x=df["date"],
+        y=df["RSI"],
+        name="RSI",
+        line=dict(
+            color="#A855F7",
+            width=3
+        )
+    ),
+    row=2,
+    col=1
+)
+
+# Linhas do RSI
+
+fig.add_hline(
+    y=70,
+    line_dash="dash",
+    line_color="red",
+    annotation_text="Sobrecompra",
+    row=2,
+    col=1
+)
+
+fig.add_hline(
+    y=30,
+    line_dash="dash",
+    line_color="green",
+    annotation_text="Sobrevenda",
+    row=2,
+    col=1
+)
+
+# Áreas coloridas do RSI
+
+fig.add_hrect(
+    y0=70,
+    y1=100,
+    fillcolor="red",
+    opacity=0.08,
+    line_width=0,
+    row=2,
+    col=1
+)
+
+fig.add_hrect(
+    y0=0,
+    y1=30,
+    fillcolor="green",
+    opacity=0.08,
+    line_width=0,
+    row=2,
+    col=1
+)
+
+# Layout
 
 fig.update_layout(
-    title="📊 Evolução do Bitcoin",
-    xaxis_title="Data",
-    yaxis_title="Preço USD",
-    xaxis=dict(
-        tickformat="%d/%m",
-        rangeslider=dict(visible=True)
+    height=800,
+    template="plotly_dark",
+    hovermode="x unified",
+    margin=dict(
+        t=50,
+        b=40,
+        l=40,
+        r=40
     ),
-    hovermode="x unified"
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.02,
+        xanchor="right",
+        x=1
+    )
 )
 
-st.plotly_chart(fig, use_container_width=True)
+# Eixos
 
-# TENDÊNCIA CORRETA
-st.subheader("📊 Tendência")
+fig.update_yaxes(
+    title_text="Preço USD",
+    row=1,
+    col=1
+)
 
-sma = df_filtered["SMA_7"].dropna()
+fig.update_yaxes(
+    title_text="RSI",
+    range=[0, 100],
+    row=2,
+    col=1
+)
+
+# Exibir gráfico
+
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={
+        "displayModeBar": True,
+        "scrollZoom": True,
+        "displaylogo": False,
+        "modeBarButtonsToAdd": [
+            "zoom2d",
+            "pan2d",
+            "resetScale2d",
+            "zoomIn2d",
+            "zoomOut2d",
+            "autoScale2d"
+        ]
+    }
+)
+
+# Tendência de mercado
+
+st.subheader("📊 Tendência de Mercado")
+
+sma = df["SMA_7"].dropna()
 
 if len(sma) > 5:
 
-    # Inclinação da média
     slope = sma.iloc[-1] - sma.iloc[-5]
 
-    # Últimos valores
-    last_price = df_filtered["price"].iloc[-1]
+    last_price = df["price"].iloc[-1]
+
     last_sma = sma.iloc[-1]
 
-    # Lógica combinada
     if last_price > last_sma and slope > 0:
-        st.markdown("### 🔴 📉 Tendência de BAIXA")
-        st.progress(100)
+
+        st.success(
+            "📈 Mercado em tendência de ALTA"
+        )
+
+        signal = "COMPRA"
 
     elif last_price < last_sma and slope < 0:
-        st.markdown("### 🟢 📈 Tendência de ALTA")
-        st.progress(30)
+
+        st.error(
+            "📉 Mercado em tendência de BAIXA"
+        )
+
+        signal = "VENDA"
 
     else:
-        st.markdown("### ⚪ 📊 Tendência LATERAL")
-        st.progress(50)
 
-else:
-    st.warning("Dados insuficientes para análise de tendência")
+        st.warning(
+            "➡️ Mercado lateralizado"
+        )
 
-# PREVISÃO
+        signal = "AGUARDAR"
+
+    st.metric(
+        "Sinal Atual",
+        signal
+    )
+
+# Projeção estatística
+
+st.subheader("🔮 Projeção Estatística")
+
 if len(df) > 10:
 
-    df["days"] = (df["date"] - df["date"].min()).dt.days
+    recent_trend = (
+        df["price"].iloc[-1]
+        - df["price"].iloc[-7]
+    ) / 7
 
-    X = df["days"].values.reshape(-1, 1)
-    y = df["price"].values
+    last_price = df["price"].iloc[-1]
 
-    model = LinearRegression()
-    model.fit(X, y)
+    volatility_factor = volatility * 0.12
 
-    future_days = np.array(range(X[-1][0] + 1, X[-1][0] + 8)).reshape(-1, 1)
-    predictions = model.predict(future_days)
+    predictions = []
+
+    upper_band = []
+
+    lower_band = []
+
+    current_price_projection = last_price
+
+    for _ in range(prediction_days):
+
+        noise = np.random.normal(
+            0,
+            volatility_factor
+        )
+
+        current_price_projection += (
+            recent_trend + noise
+        )
+
+        predictions.append(
+            current_price_projection
+        )
+
+        upper_band.append(
+            current_price_projection
+            + volatility_factor * 2
+        )
+
+        lower_band.append(
+            current_price_projection
+            - volatility_factor * 2
+        )
 
     future_dates = pd.date_range(
         start=df["date"].max(),
-        periods=8,
+        periods=prediction_days + 1,
         freq="D"
     )[1:]
 
-    fig_pred = go.Figure()
+    pred_fig = go.Figure()
 
-    fig_pred.add_trace(go.Scatter(
-        x=df["date"],
-        y=df["price"],
-        mode='lines',
-        name='Histórico'
-    ))
-
-    fig_pred.add_trace(go.Scatter(
-        x=future_dates,
-        y=predictions,
-        mode='lines+markers',
-        name='Previsão',
-        line=dict(dash='dash')
-    ))
-
-    fig_pred.update_layout(
-        title="🔮 Previsão de Preço",
-        xaxis_title="Data",
-        yaxis_title="Preço USD",
-        xaxis=dict(tickformat="%d/%m"),
-        hovermode="x unified"
+    pred_fig.add_trace(
+        go.Scatter(
+            x=df["date"],
+            y=df["price"],
+            mode="lines",
+            name="Histórico",
+            line=dict(width=3)
+        )
     )
 
-    st.plotly_chart(fig_pred, use_container_width=True)
+    pred_fig.add_trace(
+        go.Scatter(
+            x=future_dates,
+            y=predictions,
+            mode="lines+markers",
+            name="Projeção Estatística",
+            line=dict(
+                dash="dash",
+                width=4
+            ),
+            marker=dict(size=7)
+        )
+    )
 
-# BOTÃO PARA ATUALIZAR
-if st.button("Atualizar dados"):
+    pred_fig.add_trace(
+        go.Scatter(
+            x=future_dates,
+            y=upper_band,
+            line=dict(width=0),
+            showlegend=False,
+            hoverinfo="skip"
+        )
+    )
+
+    pred_fig.add_trace(
+        go.Scatter(
+            x=future_dates,
+            y=lower_band,
+            fill='tonexty',
+            fillcolor='rgba(0,176,246,0.15)',
+            line=dict(width=0),
+            name='Faixa de Confiança',
+            hoverinfo="skip"
+        )
+    )
+
+    pred_fig.add_hline(
+        y=last_price,
+        line_dash="dot",
+        annotation_text="Preço Atual"
+    )
+
+    pred_fig.update_layout(
+        template="plotly_dark",
+        hovermode="x unified",
+        height=550,
+        margin=dict(
+            t=60,
+            b=40,
+            l=40,
+            r=40
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        xaxis_title="Data",
+        yaxis_title="Preço USD"
+    )
+
+    pred_fig.update_xaxes(
+        showgrid=True,
+        gridwidth=1
+    )
+
+    pred_fig.update_yaxes(
+        showgrid=True,
+        gridwidth=1
+    )
+
+    st.plotly_chart(
+        pred_fig,
+        use_container_width=True,
+        config={
+            "displayModeBar": True,
+            "scrollZoom": True,
+            "displaylogo": False,
+            "modeBarButtonsToAdd": [
+                "zoom2d",
+                "pan2d",
+                "resetScale2d",
+                "zoomIn2d",
+                "zoomOut2d",
+                "autoScale2d"
+            ]
+        }
+    )
+
+    projected_change = (
+        (
+            predictions[-1]
+            - last_price
+        ) / last_price
+    ) * 100
+
+    if projected_change > 3:
+
+        st.success(
+            f"📈 Expectativa de alta de {projected_change:.2f}% nos próximos {prediction_days} dias."
+        )
+
+    elif projected_change < -3:
+
+        st.error(
+            f"📉 Expectativa de queda de {abs(projected_change):.2f}% nos próximos {prediction_days} dias."
+        )
+
+    else:
+
+        st.warning(
+            "➡️ Mercado projetado em consolidação lateral."
+        )
+
+# Botão de atualização
+
+if st.button("🔄 Atualizar Dados"):
+
     st.cache_data.clear()
+
     st.rerun()
+
+# Footer
+
+st.markdown("---")
+
+st.caption(
+    "Bitcoin Intelligence Dashboard • Projeto Final"
+)
