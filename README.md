@@ -2,5 +2,4 @@ Para rodar o código e abrir no navegador, execute o seguinte comando no termina
 
 O projeto tem como foco prever quedas e altas do BitCoin, sem descartar ideias de adicionar mais cripto ao decorrer do tempo.
 
-Libs usadas:
-Streamlist, Pandas, SQLite, Ploty
+Libs usadas: Streamlist, Pandas, SQLite, Ploty
